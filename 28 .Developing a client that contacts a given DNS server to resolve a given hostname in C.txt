@@ -1,0 +1,158 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <stdint.h>
+
+#define DNS_PORT 53
+#define BUFFER_SIZE 512
+
+// DNS Header Structure
+typedef struct {
+    uint16_t id; // Identification
+    uint16_t flags; // Flags
+    uint16_t qdcount; // Number of questions
+    uint16_t ancount; // Number of answers
+    uint16_t nscount; // Number of authority records
+    uint16_t arcount; // Number of additional records
+} DNSHeader;
+
+// DNS Question Structure
+typedef struct {
+    uint16_t qtype; // Query type
+    uint16_t qclass; // Query class
+} DNSQuestion;
+
+// DNS Response Parser
+void parse_dns_response(const char *response, size_t length) {
+    // Extract the DNS Header
+    const DNSHeader *header = (const DNSHeader *)response;
+    
+    // Start parsing from the end of the questions section
+    const char *ptr = response + sizeof(DNSHeader);
+    
+    // Skip over the questions section
+    for (int i = 0; i < ntohs(header->qdcount); ++i) {
+        while (*ptr != 0) ++ptr; // Skip domain name
+        ptr += 5; // Skip NULL byte and QTYPE/QCLASS
+    }
+
+    // Parse Answers
+    for (int i = 0; i < ntohs(header->ancount); ++i) {
+        while (*ptr != 0) ++ptr; // Skip domain name
+        ptr += 10; // Skip NULL byte and QTYPE/QCLASS
+
+        // Extract the Type and Class
+        uint16_t type = ntohs(*(uint16_t *)ptr);
+        uint16_t class = ntohs(*(uint16_t *)(ptr + 2));
+        uint16_t data_len = ntohs(*(uint16_t *)(ptr + 8));
+
+        // Check if this is an A record
+        if (type == 1 && class == 1) {
+            ptr += 10; // Skip TYPE, CLASS, TTL, and length
+            if (data_len == 4) {
+                // Print IP Address
+                printf("IP Address: %u.%u.%u.%u\n", 
+                    (unsigned char)ptr[0],
+                    (unsigned char)ptr[1],
+                    (unsigned char)ptr[2],
+                    (unsigned char)ptr[3]);
+            }
+        }
+
+        ptr += data_len;
+    }
+}
+
+// Construct a DNS Query
+void construct_dns_query(char *buffer, size_t *length, const char *hostname) {
+    DNSHeader *header = (DNSHeader *)buffer;
+    memset(header, 0, sizeof(DNSHeader));
+    header->id = htons(0x1234); // Transaction ID
+    header->flags = htons(0x0100); // Standard query
+    header->qdcount = htons(1); // Number of questions
+
+    char *qname = buffer + sizeof(DNSHeader);
+    char *p = qname;
+
+    // Encode the hostname in DNS format
+    const char *label = hostname;
+    while (*label) {
+        const char *start = label;
+        while (*label && *label != '.') ++label;
+        *p++ = (uint8_t)(label - start);
+        memcpy(p, start, label - start);
+        p += (label - start);
+        if (*label) ++label; // Skip the dot
+    }
+    *p++ = 0; // Null byte for end of domain name
+
+    DNSQuestion *question = (DNSQuestion *)p;
+    question->qtype = htons(1); // A record
+    question->qclass = htons(1); // IN (Internet)
+
+    *length = p + sizeof(DNSQuestion) - buffer;
+}
+
+// Send DNS Query and Print Response
+void dns_query(const char *dns_server_ip, const char *hostname) {
+    int sockfd;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
+    size_t length;
+
+    // Create UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Setup server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(DNS_PORT);
+
+    // Convert server IP address
+    if (inet_pton(AF_INET, dns_server_ip, &server_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Construct DNS query
+    construct_dns_query(buffer, &length, hostname);
+
+    // Send DNS query
+    if (sendto(sockfd, buffer, length, 0, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("sendto");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive DNS response
+    struct sockaddr_in from_addr;
+    socklen_t from_len = sizeof(from_addr);
+    ssize_t recv_len = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&from_addr, &from_len);
+
+    if (recv_len < 0) {
+        perror("recvfrom");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Parse and print the response
+    parse_dns_response(buffer, recv_len);
+
+    close(sockfd);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <DNS server IP> <hostname>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    dns_query(argv[1], argv[2]);
+    return 0;
+}
