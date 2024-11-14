@@ -1,0 +1,87 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <netinet/ip.h>
+#include <netinet/if_ether.h>
+#include <netinet/if_arp.h>
+#include <sys/ioctl.h>
+
+#define ARP_REQUEST 1
+#define ARP_REPLY 2
+
+void send_arp_request(const char *interface, const char *target_ip) {
+    int sockfd;
+    struct ifreq ifr;
+    struct ether_arp arp_req;
+    struct sockaddr_ll sa;
+    struct ethhdr eth_hdr;
+    unsigned char src_mac[6];
+    unsigned char dst_mac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}; // Broadcast MAC
+    struct sockaddr_ll sll;
+    char packet[sizeof(struct ethhdr) + sizeof(struct ether_arp)];
+    
+    // Create raw socket
+    if ((sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ARP))) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Get source MAC address
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, interface, IFNAMSIZ-1);
+    if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) < 0) {
+        perror("ioctl");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+    memcpy(src_mac, ifr.ifr_hwaddr.sa_data, 6);
+
+    // Prepare Ethernet header
+    memcpy(eth_hdr.h_dest, dst_mac, 6);
+    memcpy(eth_hdr.h_source, src_mac, 6);
+    eth_hdr.h_proto = htons(ETH_P_ARP);
+
+    // Prepare ARP request
+    memset(&arp_req, 0, sizeof(arp_req));
+    arp_req.arp_hrd = htons(ARPHRD_ETHER);
+    arp_req.arp_pro = htons(ETH_P_IP);
+    arp_req.arp_hln = 6;
+    arp_req.arp_pln = 4;
+    arp_req.arp_op = htons(ARP_REQUEST);
+    memcpy(arp_req.arp_sha, src_mac, 6);
+    memset(arp_req.arp_tha, 0, 6);
+    inet_pton(AF_INET, "0.0.0.0", arp_req.arp_spa);
+    inet_pton(AF_INET, target_ip, arp_req.arp_tpa);
+
+    // Construct packet
+    memcpy(packet, &eth_hdr, sizeof(struct ethhdr));
+    memcpy(packet + sizeof(struct ethhdr), &arp_req, sizeof(struct ether_arp));
+
+    // Get the index of the network interface
+    memset(&sll, 0, sizeof(sll));
+    sll.sll_family = AF_PACKET;
+    sll.sll_ifindex = if_nametoindex(interface);
+
+    // Send ARP request
+    if (sendto(sockfd, packet, sizeof(packet), 0, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+        perror("sendto");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("ARP request sent for IP: %s\n", target_ip);
+    close(sockfd);
+}
+
+int main() {
+    const char *interface = "eth0"; // Change this to your network interface
+    const char *target_ip = "192.168.1.1"; // Change this to the IP you want to resolve
+
+    send_arp_request(interface, target_ip);
+
+    return 0;
+}

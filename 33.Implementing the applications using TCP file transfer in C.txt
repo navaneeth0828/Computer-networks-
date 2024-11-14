@@ -1,0 +1,168 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#define PORT 12345
+#define BUFFER_SIZE 1024
+
+void handle_server() {
+    int server_sock, client_sock;
+    struct sockaddr_in server_addr, client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_received;
+    int file_fd;
+
+    // Create a TCP socket
+    if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set up server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+
+    // Bind the socket
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_sock, 1) < 0) {
+        perror("listen");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port %d\n", PORT);
+
+    // Accept a client connection
+    if ((client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len)) < 0) {
+        perror("accept");
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Open file for writing
+    file_fd = open("received_file", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (file_fd < 0) {
+        perror("open");
+        close(client_sock);
+        close(server_sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Receive file data from client
+    while ((bytes_received = recv(client_sock, buffer, BUFFER_SIZE, 0)) > 0) {
+        if (write(file_fd, buffer, bytes_received) < 0) {
+            perror("write");
+            close(file_fd);
+            close(client_sock);
+            close(server_sock);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (bytes_received < 0) {
+        perror("recv");
+    }
+
+    printf("File received and saved as 'received_file'\n");
+
+    close(file_fd);
+    close(client_sock);
+    close(server_sock);
+}
+
+void handle_client(const char *filename) {
+    int sock;
+    struct sockaddr_in server_addr;
+    char buffer[BUFFER_SIZE];
+    ssize_t bytes_sent, bytes_read;
+    int file_fd;
+
+    // Create a TCP socket
+    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set up server address
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(PORT);
+
+    // Convert server IP address
+    if (inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr) <= 0) {
+        perror("inet_pton");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Connect to the server
+    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("connect");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Open the file to be sent
+    file_fd = open(filename, O_RDONLY);
+    if (file_fd < 0) {
+        perror("open");
+        close(sock);
+        exit(EXIT_FAILURE);
+    }
+
+    // Send file data to the server
+    while ((bytes_read = read(file_fd, buffer, BUFFER_SIZE)) > 0) {
+        bytes_sent = send(sock, buffer, bytes_read, 0);
+        if (bytes_sent < 0) {
+            perror("send");
+            close(file_fd);
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    if (bytes_read < 0) {
+        perror("read");
+    }
+
+    printf("File '%s' sent successfully\n", filename);
+
+    close(file_fd);
+    close(sock);
+}
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <server/client> [filename]\n", argv[0]);
+        exit(EXIT_FAILURE);
+    }
+
+    if (strcmp(argv[1], "server") == 0) {
+        handle_server();
+    } else if (strcmp(argv[1], "client") == 0) {
+        if (argc != 3) {
+            fprintf(stderr, "Usage: %s client <filename>\n", argv[0]);
+            exit(EXIT_FAILURE);
+        }
+        handle_client(argv[2]);
+    } else {
+        fprintf(stderr, "Invalid argument. Use 'server' or 'client'.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    return 0;
+}

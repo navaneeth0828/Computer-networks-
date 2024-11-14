@@ -1,0 +1,60 @@
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+
+#define POLYNOMIAL 0xEDB88320 // CRC-32 polynomial
+#define INITIAL_REMAINDER 0xFFFFFFFF
+#define FINAL_XOR_VALUE 0xFFFFFFFF
+
+uint32_t crc_table[256];
+
+// Initialize the CRC table
+void crc32_init() {
+    uint32_t remainder;
+    for (int i = 0; i < 256; i++) {
+        remainder = i;
+        for (int j = 8; j > 0; j--) {
+            if (remainder & 1) {
+                remainder = (remainder >> 1) ^ POLYNOMIAL;
+            } else {
+                remainder = (remainder >> 1);
+            }
+        }
+        crc_table[i] = remainder;
+    }
+}
+
+// Compute CRC for the given data
+uint32_t crc32_compute(const uint8_t *data, size_t length) {
+    uint32_t crc = INITIAL_REMAINDER;
+    while (length--) {
+        uint8_t table_index = (crc ^ *data++) & 0xFF;
+        crc = (crc >> 8) ^ crc_table[table_index];
+    }
+    return crc ^ FINAL_XOR_VALUE;
+}
+
+// Example function to simulate data transmission
+void simulate_data_transmission(const char *data) {
+    uint32_t crc = crc32_compute((const uint8_t *)data, strlen(data));
+    printf("Original data: %s\n", data);
+    printf("Computed CRC-32: %08X\n", crc);
+
+    // Simulate data reception and CRC check
+    printf("Verifying data...\n");
+    uint32_t received_crc = crc32_compute((const uint8_t *)data, strlen(data));
+    if (received_crc == crc) {
+        printf("Data is correct. CRC-32 match.\n");
+    } else {
+        printf("Data is incorrect. CRC-32 mismatch.\n");
+    }
+}
+
+int main() {
+    crc32_init(); // Initialize CRC table
+
+    const char *data = "Hello, CRC!";
+    simulate_data_transmission(data);
+
+    return 0;
+}
